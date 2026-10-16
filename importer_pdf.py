@@ -1,18 +1,24 @@
-import pymupdf
+import os
+import glob
 import chromadb
 from sentence_transformers import SentenceTransformer
+import fitz  # PyMuPDF
 
 
-# Charger le modèle multilingue pour transformer les textes en vecteurs numériques
+# Charger le modèle multilingue
 modele = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 
-# Définir la fonction qui transforme les textes en vecteurs
+# Définir la fonction d'embeddings pour ChromaDB
 class FonctionEmbeddings:
     def __init__(self, modele):
         self.modele = modele
 
     def __call__(self, input):
+        vecteurs = self.modele.encode(input)
+        return vecteurs.tolist()
+
+    def embed_query(self, input):
         vecteurs = self.modele.encode(input)
         return vecteurs.tolist()
 
@@ -24,83 +30,11 @@ class FonctionEmbeddings:
 embedding_function = FonctionEmbeddings(modele)
 
 
-# Ouvrir le fichier PDF
-document = pymupdf.open("data/document.pdf")
-
-# Créer une liste pour stocker les pages
-pages = []
-
-# Lire chaque page du PDF
-for numero, page in enumerate(document, start=1):
-    texte = page.get_text()
-
-    # Garder le numéro de page et le texte
-    pages.append({
-        "page": numero,
-        "text": texte
-    })
-
-# Fermer le PDF
-document.close()
-
-print("Nombre de pages extraites :", len(pages))
-
-
-# Découper un texte en petits morceaux
-def decouper_texte(texte, taille=500):
-    morceaux = []
-
-    debut = 0
-
-    while debut < len(texte):
-        morceau = texte[debut:debut + taille]
-        morceaux.append(morceau)
-        debut += taille
-
-    return morceaux
-
-
-print("Fonction de découpage prête !")
-
-
-# Créer une liste pour tous les morceaux
-tous_les_morceaux = []
-
-# Parcourir toutes les pages
-for page in pages:
-    morceaux_page = decouper_texte(page["text"])
-
-    # Garder chaque morceau avec son numéro de page
-    for morceau in morceaux_page:
-        tous_les_morceaux.append({
-            "page": page["page"],
-            "text": morceau
-        })
-
-print("Nombre total de morceaux :", len(tous_les_morceaux))
-
-
-# Préparer les textes et leurs métadonnées
-textes = []
-metadonnees = []
-identifiants = []
-
-for numero, morceau in enumerate(tous_les_morceaux):
-    textes.append(morceau["text"])
-
-    metadonnees.append({
-        "page": morceau["page"],
-        "source": "document.pdf"
-    })
-
-    identifiants.append("pdf_morceau_" + str(numero))
-
-
 # Ouvrir la base de données ChromaDB
 client = chromadb.PersistentClient(path="chroma_db")
 
 
-# Supprimer l'ancienne collection si elle existe
+# Recréer la collection pour éviter de conserver d'anciennes données
 collections_existantes = [
     collection.name for collection in client.list_collections()
 ]
@@ -109,25 +43,65 @@ if "documents" in collections_existantes:
     client.delete_collection(name="documents")
     print("Ancienne collection supprimée.")
 
-
-# Créer la collection avec le modèle d'embeddings multilingue
 collection = client.create_collection(
     name="documents",
     embedding_function=embedding_function
 )
 
-print("Collection créée avec le modèle multilingue !")
+
+# Trouver tous les PDF du dossier data
+fichiers_pdf = glob.glob(os.path.join("data", "*.pdf"))
+
+if not fichiers_pdf:
+    print("Aucun fichier PDF trouvé dans le dossier data.")
+
+# Importer chaque PDF
+for chemin_pdf in fichiers_pdf:
+    nom_pdf = os.path.basename(chemin_pdf)
+    print(f"\nImportation de : {nom_pdf}")
+
+    document = fitz.open(chemin_pdf)
+
+    textes = []
+    identifiants = []
+    metadonnees = []
+
+    # Lire chaque page du PDF
+    for numero_page, page in enumerate(document):
+        texte = page.get_text()
+
+        # Ignorer les pages sans texte
+        if not texte.strip():
+            continue
+
+        # Découper le texte en morceaux de 500 caractères
+        taille_morceau = 500
+
+        for debut in range(0, len(texte), taille_morceau):
+            morceau = texte[debut:debut + taille_morceau]
+
+            identifiants.append(
+                f"{nom_pdf}_page{numero_page + 1}_morceau{len(identifiants) + 1}"
+            )
+            textes.append(morceau)
+            metadonnees.append({
+                "source": nom_pdf,
+                "page": numero_page + 1
+            })
+
+    document.close()
+
+    # Ajouter les morceaux du PDF à ChromaDB
+    if textes:
+        collection.add(
+            ids=identifiants,
+            documents=textes,
+            metadatas=metadonnees
+        )
+        print(f"{len(textes)} morceaux importés depuis {nom_pdf}.")
+    else:
+        print(f"Aucun texte exploitable trouvé dans {nom_pdf}.")
 
 
-# Enregistrer les morceaux dans ChromaDB
-if textes:
-    collection.add(
-        ids=identifiants,
-        documents=textes,
-        metadatas=metadonnees
-    )
-
-    print("Le PDF a été enregistré dans ChromaDB !")
-    print("Nombre de morceaux dans ChromaDB :", collection.count())
-else:
-    print("Aucun texte trouvé dans le PDF.")
+print("\nImportation terminée !")
+print("Nombre total de morceaux :", collection.count())

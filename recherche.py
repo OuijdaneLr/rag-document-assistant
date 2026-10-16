@@ -44,19 +44,19 @@ collection = client.get_collection(
 
 # Afficher le nombre de morceaux
 print("Nombre de morceaux :", collection.count())
-
+"""
 resultat = collection.get(
     where={"source": "document.pdf"}
 )
-
-print("Morceaux provenant du PDF :", len(resultat["ids"]))
+"""
+print("Morceaux provenant du PDF :", collection.count())
 
 # Rechercher les passages pertinents
 def rechercher_texte(question):
     resultats = collection.query(
         query_texts=[question],
         n_results=2,
-        where={"source": "document.pdf"}
+        #where={"source": "document.pdf"}
     )
     return resultats
 
@@ -87,8 +87,11 @@ while True:
 
     for numero, texte in enumerate(resultats["documents"][0]):
         metadonnees = resultats["metadatas"][0][numero]
-        print("\nPassage :", texte)
+
+        print("\nSource :", metadonnees.get("source", "Inconnue"))
+        print("Passage :", texte)
         print("Page :", metadonnees.get("page", "Inconnue"))
+
 
     # Générer une réponse à partir du contexte
     reponse = ollama.chat(
