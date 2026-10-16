@@ -1,111 +1,96 @@
-
 import chromadb
 import ollama
+from sentence_transformers import SentenceTransformer
 
-# Ouvrir la base de données
+
+# Charger le modèle multilingue utilisé lors de l'importation
+modele = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+
+
+
+class FonctionEmbeddings:
+    def __init__(self, modele):
+        self.modele = modele
+
+    # Transformer les textes en vecteurs lors de l'importation
+    def __call__(self, input):
+        vecteurs = self.modele.encode(input)
+        return vecteurs.tolist()
+
+    # Transformer une question en vecteur lors de la recherche
+    def embed_query(self, input):
+        vecteurs = self.modele.encode(input)
+        return vecteurs.tolist()
+
+    @staticmethod
+    def name():
+        return "modele-multilingue"
+
+
+
+embedding_function = FonctionEmbeddings(modele)
+
+
+# Ouvrir la base de données ChromaDB
 client = chromadb.PersistentClient(path="chroma_db")
 
-# Ouvrir la collection des documents
-collection = client.get_or_create_collection(
-    name="documents"
+
+# Ouvrir la collection existante avec le même modèle
+collection = client.get_collection(
+    name="documents",
+    embedding_function=embedding_function
 )
+
 
 # Afficher le nombre de morceaux
 print("Nombre de morceaux :", collection.count())
+
 resultat = collection.get(
     where={"source": "document.pdf"}
 )
 
 print("Morceaux provenant du PDF :", len(resultat["ids"]))
 
-# Rechercher des passages dans les documents
-
+# Rechercher les passages pertinents
 def rechercher_texte(question):
     resultats = collection.query(
         query_texts=[question],
         n_results=2,
         where={"source": "document.pdf"}
     )
-
     return resultats
-
-
-# Poser une question
-#question = input("Pose ta question sur le document : ")
 
 # Poser plusieurs questions
 while True:
-    question = input("\nPose ta question (ou tape 'quitter') : ")
+    question = input(
+        "\nPose ta question sur la lettre (ou tape 'quitter') : "
+    ).strip()
 
-    if question.lower().strip() == "quitter":
+    if question.lower() == "quitter":
         print("Au revoir !")
         break
 
+    if not question:
+        print("Écris une question avant d'appuyer sur Entrée.")
+        continue
+
     resultats = rechercher_texte(question)
 
-    if resultats["documents"] and resultats["documents"][0]:
-        contexte = "\n\n".join(resultats["documents"][0])
-
-        print("\nPassages trouvés :")
-        for numero in range(len(resultats["documents"][0])):
-            texte = resultats["documents"][0][numero]
-            metadonnees = resultats["metadatas"][0][numero]
-
-            print("\nPassage :", texte)
-            print("Page :", metadonnees.get("page", "Inconnue"))
-
-        reponse = ollama.chat(
-            model="llama3.2",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Tu es un assistant qui analyse des lettres de motivation. "
-                        "Réponds en français uniquement à partir du contexte fourni. "
-                        "Si l'information n'est pas présente, dis-le clairement."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Contexte de la lettre :\n{contexte}\n\n"
-                        f"Question : {question}"
-                    )
-                }
-            ]
-        )
-
-        print("\nRéponse de Llama 3.2 :")
-        print(reponse["message"]["content"])
-    else:
+    if not resultats["documents"] or not resultats["documents"][0]:
         print("Aucun passage pertinent trouvé.")
+        continue
 
-        
-
-# Effectuer la recherche
-resultats = rechercher_texte(question)
-
-# Afficher les résultats
-print("\nRésultats de la recherche :")
-
-if resultats["documents"] and resultats["documents"][0]:
-    for numero in range(len(resultats["documents"][0])):
-        texte = resultats["documents"][0][numero]
-        metadonnees = resultats["metadatas"][0][numero]
-
-        print("\nPassage trouvé :")
-        print(texte)
-
-        print("Page :", metadonnees.get("page", "Inconnue"))
-        print("Source :", metadonnees.get("source", "Inconnue"))
-else:
-    print("Aucun passage trouvé.")
-
-
-# Générer une réponse avec Llama 3.2
-if resultats["documents"] and resultats["documents"][0]:
+    # Préparer le contexte à partir des passages retrouvés
     contexte = "\n\n".join(resultats["documents"][0])
 
+    print("\nPassages trouvés :")
+
+    for numero, texte in enumerate(resultats["documents"][0]):
+        metadonnees = resultats["metadatas"][0][numero]
+        print("\nPassage :", texte)
+        print("Page :", metadonnees.get("page", "Inconnue"))
+
+    # Générer une réponse à partir du contexte
     reponse = ollama.chat(
         model="llama3.2",
         messages=[
@@ -114,13 +99,14 @@ if resultats["documents"] and resultats["documents"][0]:
                 "content": (
                     "Tu es un assistant qui analyse des lettres de motivation. "
                     "Réponds en français uniquement à partir du contexte fourni. "
-                    "Si l'information n'est pas présente, dis-le clairement."
+                    "N'invente aucune information. "
+                    "Si l'information est absente du contexte, dis-le clairement."
                 )
             },
             {
                 "role": "user",
                 "content": (
-                    f"Contexte de la lettre de motivation :\n{contexte}\n\n"
+                    f"Contexte de la lettre :\n{contexte}\n\n"
                     f"Question : {question}"
                 )
             }
