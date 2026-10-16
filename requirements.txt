@@ -2,3 +2,4 @@ pymupdf
 chromadb
 ollama
 sentence-transformers==6.1.0
+streamlit==1.66.0
